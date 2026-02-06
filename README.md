@@ -1,175 +1,202 @@
-# PersonaPlex: Voice and Role Control for Full Duplex Conversational Speech Models
+# PersonaPlex Server Container
 
-[![Weights](https://img.shields.io/badge/🤗-Weights-yellow)](https://huggingface.co/nvidia/personaplex-7b-v1)
-[![Paper](https://img.shields.io/badge/📄-Paper-blue)](https://research.nvidia.com/labs/adlr/files/personaplex/personaplex_preprint.pdf)
-[![Demo](https://img.shields.io/badge/🎮-Demo-green)](https://research.nvidia.com/labs/adlr/personaplex/)
-[![Discord](https://img.shields.io/badge/Discord-Join-purple?logo=discord)](https://discord.gg/5jAXrrbwRb)
+[![Deploy on Brev](https://img.shields.io/badge/Deploy%20on-Brev-blue)](https://brev.dev)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker)](https://docs.docker.com/compose/)
+[![NVIDIA GPU](https://img.shields.io/badge/NVIDIA-GPU%20Required-76B900?logo=nvidia)](https://www.nvidia.com/)
 
-PersonaPlex is a real-time, full-duplex speech-to-speech conversational model that enables persona control through text-based role prompts and audio-based voice conditioning. Trained on a combination of synthetic and real conversations, it produces natural, low-latency spoken interactions with a consistent persona. PersonaPlex is based on the [Moshi](https://arxiv.org/abs/2410.00037) architecture and weights.
+**Full-duplex conversational AI with voice and persona control** - containerized for easy deployment on NVIDIA GPUs.
 
-<p align="center">
-  <img src="assets/architecture_diagram.png" alt="PersonaPlex Model Architecture">
-  <br>
-  <em>PersonaPlex Architecture</em>
-</p>
+This repository contains the complete PersonaPlex source code plus production-ready Docker configurations for:
+- 🚀 **One-click Brev deployment** with GPU support
+- 🐳 **Local Docker Compose** setup
+- 📚 **Full source code** for deep analysis and customization
+- 🔧 **Backend + Frontend** multi-service architecture
 
-## Usage
+---
 
-### Prerequisites
+## 🎯 Quick Start Options
 
-Install the [Opus audio codec](https://github.com/xiph/opus) development library:
+### Option 1: Deploy on Brev (Recommended for Cloud)
+
+1. Click the "Deploy on Brev" button above
+2. Select GPU: **1x NVIDIA T4** (minimum) or **1x A40** (recommended)
+3. Add your `HF_TOKEN` environment variable
+4. Launch! 🎉
+
+### Option 2: Local Docker Compose
+
+**Prerequisites:**
+- Docker with NVIDIA Container Toolkit
+- NVIDIA GPU with 16GB+ VRAM
+- Hugging Face account with PersonaPlex license accepted
+
+**Setup:**
 ```bash
-# Ubuntu/Debian
-sudo apt install libopus-dev
+# Clone this repo
+git clone https://github.com/TwinPeaksTownie/personaplex_server_container.git
+cd personaplex_server_container
 
-# Fedora/RHEL
-sudo dnf install opus-devel
+# Configure environment
+cp .env.example .env
+# Edit .env and add your HF_TOKEN
 
-# macOS
-brew install opus
+# Launch
+docker-compose up --build
 ```
 
-### Installation
+**Access:**
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:8080
 
-Download this repository and install with:
+---
+
+## 📁 Repository Structure
+
+```
+personaplex_server_container/
+├── docker-compose.yml          # Multi-service orchestration
+├── Dockerfile.backend          # Backend container (Moshi server)
+├── .env.example                # Environment template
+│
+├── moshi/                      # Backend source code
+│   ├── moshi/                  # Python package
+│   │   ├── server.py          # WebSocket server
+│   │   ├── models.py          # Model loading & inference
+│   │   └── ...
+│   └── pyproject.toml         # Python dependencies
+│
+├── client/                     # Frontend source code
+│   ├── src/                   # React/TypeScript app
+│   ├── Dockerfile             # Frontend container
+│   └── package.json           # Node dependencies
+│
+├── voices/                     # Voice prompt embeddings (optional)
+└── docs/                       # Additional documentation
+```
+
+---
+
+## 🔧 Configuration
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `HF_TOKEN` | ✅ Yes | Hugging Face token ([get one](https://huggingface.co/settings/tokens)) |
+| `VITE_QUEUE_API_URL` | No | Backend URL (default: `http://personaplex-backend:8080`) |
+| `NO_TORCH_COMPILE` | No | Set to `1` for faster startup (recommended) |
+
+### GPU Requirements
+
+| GPU | VRAM | Performance | Use Case |
+|-----|------|-------------|----------|
+| NVIDIA T4 | 16GB | Good (8-bit) | Development, demos |
+| NVIDIA A40 | 48GB | Excellent | Production, full precision |
+| NVIDIA A100 | 80GB | Best | High-load production |
+
+---
+
+## 🧠 Understanding the Backend
+
+This repo includes the **complete PersonaPlex source code** for deep analysis:
+
+### Key Backend Components
+
+1. **`moshi/moshi/server.py`** - WebSocket server handling real-time audio streaming
+2. **`moshi/moshi/models.py`** - Model loading, inference, and voice conditioning
+3. **`moshi/moshi/audio.py`** - Opus codec handling and audio processing
+4. **`moshi/moshi/prompt.py`** - Text and voice prompt management
+
+### Architecture Overview
+
+```
+┌─────────────┐     WebSocket      ┌──────────────┐
+│   Client    │ ←─────────────────→ │ Moshi Server │
+│  (Browser)  │   Opus Audio       │  (FastAPI)   │
+└─────────────┘   + Metadata       └──────┬───────┘
+                                          │
+                                          ↓
+                                   ┌──────────────┐
+                                   │ PersonaPlex  │
+                                   │   Model      │
+                                   │  (7B params) │
+                                   └──────────────┘
+```
+
+**Recommended for Deep Dive:**
+- Run [DeepWiki](https://github.com/deepwiki/deepwiki) on this repo to generate comprehensive documentation
+- Start with `moshi/moshi/server.py` to understand the WebSocket protocol
+- Explore `moshi/moshi/models.py` for model inference details
+
+---
+
+## 🎤 Voice Prompts
+
+PersonaPlex supports custom voice embeddings. Place `.pt` files in the `voices/` directory:
+
 ```bash
-pip install moshi/.
+voices/
+├── Laura.wav       # Your custom voice sample
+└── NATF2.pt        # Pre-generated embedding
 ```
 
-Extra step for Blackwell based GPUs as suggested in (See https://github.com/NVIDIA/personaplex/issues/2):
+**Pre-packaged voices:**
+- Natural (female): `NATF0`, `NATF1`, `NATF2`, `NATF3`
+- Natural (male): `NATM0`, `NATM1`, `NATM2`, `NATM3`
+- Variety (female): `VARF0-4`
+- Variety (male): `VARM0-4`
+
+---
+
+## 🐛 Troubleshooting
+
+### Container won't start
 ```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
+# Check GPU availability
+docker run --rm --gpus all nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
+
+# Check logs
+docker-compose logs personaplex-backend
 ```
 
+### Frontend can't connect to backend
+- Ensure `VITE_QUEUE_API_URL` uses the service name `personaplex-backend` (not `localhost`)
+- Check health status: `curl http://localhost:8080/health`
 
-### Accept Model License
-Log in to your Huggingface account and accept the PersonaPlex model license [here](https://huggingface.co/nvidia/personaplex-7b-v1). <br>
-Then set up your Huggingface authentication:
-```bash
-export HF_TOKEN=<YOUR_HUGGINGFACE_TOKEN>
-```
+### Out of memory errors
+- Use a GPU with more VRAM
+- Enable CPU offload: add `--cpu-offload` to the backend command in `docker-compose.yml`
 
-### Launch Server
+---
 
-Launch server for live interaction (temporary SSL certs for https):
-```bash
-SSL_DIR=$(mktemp -d); python -m moshi.server --ssl "$SSL_DIR"
-```
+## 📚 Additional Resources
 
-**CPU Offload:** If your GPU has insufficient memory, use the `--cpu-offload` flag to offload model layers to CPU. This requires the `accelerate` package (`pip install accelerate`):
-```bash
-SSL_DIR=$(mktemp -d); python -m moshi.server --ssl "$SSL_DIR" --cpu-offload
-```
+- [Official PersonaPlex Paper](https://research.nvidia.com/labs/adlr/files/personaplex/personaplex_preprint.pdf)
+- [Model Weights](https://huggingface.co/nvidia/personaplex-7b-v1)
+- [Moshi Architecture](https://arxiv.org/abs/2410.00037)
+- [FullDuplexBench Evaluation](https://arxiv.org/abs/2503.04721)
 
-Access the Web UI from a browser at `localhost:8998` if running locally, otherwise look for the access link printed by the script:
-```
-Access the Web UI directly at https://11.54.401.33:8998
-```
+---
 
-### Offline Evaluation
+## 📝 License
 
-For offline evaluation use the offline script that streams in an input wav file and produces an output wav file from the captured output stream. The output file will be the same duration as the input file.
+- **Code**: MIT License (see `LICENSE-MIT`)
+- **Model Weights**: NVIDIA Open Model License
 
-Add `--cpu-offload` to any command below if your GPU has insufficient memory (requires `accelerate` package). Or install cpu-only PyTorch for offline evaluation on pure CPU.
+---
 
-**Assistant example:**
-```bash
-HF_TOKEN=<TOKEN> \
-python -m moshi.offline \
-  --voice-prompt "NATF2.pt" \
-  --input-wav "assets/test/input_assistant.wav" \
-  --seed 42424242 \
-  --output-wav "output.wav" \
-  --output-text "output.json"
-```
+## 🤝 Contributing
 
-**Service example:**
-```bash
-HF_TOKEN=<TOKEN> \
-python -m moshi.offline \
-  --voice-prompt "NATM1.pt" \
-  --text-prompt "$(cat assets/test/prompt_service.txt)" \
-  --input-wav "assets/test/input_service.wav" \
-  --seed 42424242 \
-  --output-wav "output.wav" \
-  --output-text "output.json"
-```
+This is a containerized deployment repo. For core PersonaPlex contributions, see the [official NVIDIA repository](https://github.com/NVIDIA/personaplex).
 
-## Voices
+For container/deployment improvements:
+1. Fork this repo
+2. Create a feature branch
+3. Test with `docker-compose up --build`
+4. Submit a PR
 
-PersonaPlex supports a wide range of voices; we pre-package embeddings for voices that sound more natural and conversational (NAT) and others that are more varied (VAR). The fixed set of voices are labeled:
-```
-Natural(female): NATF0, NATF1, NATF2, NATF3
-Natural(male):   NATM0, NATM1, NATM2, NATM3
-Variety(female): VARF0, VARF1, VARF2, VARF3, VARF4
-Variety(male):   VARM0, VARM1, VARM2, VARM3, VARM4
-```
+---
 
-## Prompting Guide
+## 🙏 Acknowledgments
 
-The model is trained on synthetic conversations for a fixed assistant role and varying customer service roles.
-
-### Assistant Role
-
-The assistant role has the prompt:
-```
-You are a wise and friendly teacher. Answer questions or provide advice in a clear and engaging way.
-```
-
-Use this prompt for the QA assistant focused "User Interruption" evaluation category in [FullDuplexBench](https://arxiv.org/abs/2503.04721).
-
-### Customer Service Roles
-
-The customer service roles support a variety of prompts. Here are some examples for prompting style reference:
-```
-You work for CitySan Services which is a waste management and your name is Ayelen Lucero. Information: Verify customer name Omar Torres. Current schedule: every other week. Upcoming pickup: April 12th. Compost bin service available for $8/month add-on.
-```
-```
-You work for Jerusalem Shakshuka which is a restaurant and your name is Owen Foster. Information: There are two shakshuka options: Classic (poached eggs, $9.50) and Spicy (scrambled eggs with jalapenos, $10.25). Sides include warm pita ($2.50) and Israeli salad ($3). No combo offers. Available for drive-through until 9 PM.
-```
-```
-You work for AeroRentals Pro which is a drone rental company and your name is Tomaz Novak. Information: AeroRentals Pro has the following availability: PhoenixDrone X ($65/4 hours, $110/8 hours), and the premium SpectraDrone 9 ($95/4 hours, $160/8 hours). Deposit required: $150 for standard models, $300 for premium.
-```
-
-### Casual Conversations
-
-The model is also trained on real conversations from the [Fisher English Corpus](https://catalog.ldc.upenn.edu/LDC2004T19) with LLM-labeled prompts for open-ended conversations. Here are some example prompts for casual conversations:
-```
-You enjoy having a good conversation.
-```
-```
-You enjoy having a good conversation. Have a casual discussion about eating at home versus dining out.
-```
-```
-You enjoy having a good conversation. Have an empathetic discussion about the meaning of family amid uncertainty.
-```
-```
-You enjoy having a good conversation. Have a reflective conversation about career changes and feeling of home. You have lived in California for 21 years and consider San Francisco your home. You work as a teacher and have traveled a lot. You dislike meetings.
-```
-```
-You enjoy having a good conversation. Have a casual conversation about favorite foods and cooking experiences. You are David Green, a former baker now living in Boston. You enjoy cooking diverse international dishes and appreciate many ethnic restaurants.
-```
-
-Use the prompt `You enjoy having a good conversation.` for the "Pause Handling", "Backchannel" and "Smooth Turn Taking" evaluation categories of FullDuplexBench.
-
-## Generalization
-
-Personaplex finetunes Moshi and benefits from the generalization capabilities of the underlying [Helium](https://kyutai.org/blog/2025-04-30-helium) LLM. Thanks to the broad training corpus of the backbone, we find that the model will respond plausibly to out-of-distribution prompts and lead to unexpected or fun conversations. We encourage experimentation with different prompts to test the model's emergent ability to handle scenarios outside its training distribution. As an inspiration we feature the following astronaut prompt in the WebUI:
-```
-You enjoy having a good conversation. Have a technical discussion about fixing a reactor core on a spaceship to Mars. You are an astronaut on a Mars mission. Your name is Alex. You are already dealing with a reactor core meltdown on a Mars mission. Several ship systems are failing, and continued instability will lead to catastrophic failure. You explain what is happening and you urgently ask for help thinking through how to stabilize the reactor.
-```
-
-## License
-
-The present code is provided under the MIT license. The weights for the models are released under the NVIDIA Open Model license.
-
-## Citation
-
-If you use PersonaPlex in your research, please cite our paper:
-```bibtex
-@article{roy2026personaplex,
-  title={PersonaPlex: Voice and Role Control for Full Duplex Conversational Speech Models},
-  author={Roy, Rajarshi and Raiman, Jonathan and Lee, Sang-gil and Ene, Teodor-Dumitru and Kirby, Robert and Kim, Sungwon and Kim, Jaehyeon and Catanzaro, Bryan},
-  year={2026}
-}
-```
+Built on [PersonaPlex](https://github.com/NVIDIA/personaplex) by NVIDIA Research.
