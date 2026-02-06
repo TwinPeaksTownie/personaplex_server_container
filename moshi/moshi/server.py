@@ -36,6 +36,7 @@ import secrets
 import sys
 from typing import Literal, Optional
 
+import json
 import aiohttp
 from aiohttp import web
 from huggingface_hub import hf_hub_download
@@ -131,6 +132,59 @@ class ServerState:
         if self.device.type == 'cuda':
             torch.cuda.synchronize()
 
+
+    async def handle_health(self, request):
+        """Health check endpoint."""
+        return web.json_response({"status": "ok"})
+
+    async def handle_voices(self, request):
+        """List available voice prompt files."""
+        voices = []
+        if self.voice_prompt_dir and os.path.isdir(self.voice_prompt_dir):
+            for f in sorted(os.listdir(self.voice_prompt_dir)):
+                if f.endswith(('.pt', '.wav')):
+                    voices.append(f)
+        return web.json_response({"voices": voices})
+
+    async def handle_voice_upload(self, request):
+        """Upload a .wav file as a new voice prompt."""
+        if not self.voice_prompt_dir:
+            return web.json_response(
+                {"error": "Voice prompt directory not configured"}, status=500
+            )
+
+        reader = await request.multipart()
+        field = await reader.next()
+        if field is None:
+            return web.json_response({"error": "No file uploaded"}, status=400)
+
+        filename = field.filename or "uploaded_voice.wav"
+        # Sanitize: only allow alphanumeric, underscore, hyphen, dot
+        safe_name = "".join(
+            c for c in filename if c.isalnum() or c in ("_", "-", ".")
+        )
+        if not safe_name.lower().endswith(".wav"):
+            return web.json_response(
+                {"error": "Only .wav files are accepted"}, status=400
+            )
+
+        filepath = os.path.join(self.voice_prompt_dir, safe_name)
+        size = 0
+        with open(filepath, "wb") as f:
+            while True:
+                chunk = await field.read_chunk()
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > 50 * 1024 * 1024:  # 50MB limit
+                    os.remove(filepath)
+                    return web.json_response(
+                        {"error": "File too large (max 50MB)"}, status=400
+                    )
+                f.write(chunk)
+
+        logger.info(f"Voice uploaded: {safe_name} ({size} bytes)")
+        return web.json_response({"status": "ok", "filename": safe_name, "size": size})
 
     async def handle_chat(self, request):
         ws = web.WebSocketResponse()
@@ -456,7 +510,21 @@ def main():
     )
     logger.info("warming up the model")
     state.warmup()
-    app = web.Application()
+    @web.middleware
+    async def cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            resp = web.Response()
+        else:
+            resp = await handler(request)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp
+
+    app = web.Application(middlewares=[cors_middleware])
+    app.router.add_get("/health", state.handle_health)
+    app.router.add_get("/api/voices", state.handle_voices)
+    app.router.add_post("/api/voices/upload", state.handle_voice_upload)
     app.router.add_get("/api/chat", state.handle_chat)
     if static_path is not None:
         async def handle_root(_):
