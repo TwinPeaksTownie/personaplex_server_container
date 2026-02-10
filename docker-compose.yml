@@ -1,10 +1,10 @@
 services:
-  personaplex-backend:
+  personaplex:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile.unified
     ports:
-      - "8080:8080"
+      - "5173:5173"
     environment:
       - NO_TORCH_COMPILE=1
       - HF_HOME=/app/.cache/huggingface
@@ -19,26 +19,13 @@ services:
     volumes:
       - ./voices:/app/voices
       - huggingface-cache:/app/.cache/huggingface
-    command: ["/app/moshi/.venv/bin/python", "-m", "moshi.server", "--voice-prompt-dir", "/app/voices", "--host", "0.0.0.0", "--port", "8080"]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "https://localhost:5173", "--insecure"]
       interval: 30s
       timeout: 10s
-      retries: 3
-
-  personaplex-frontend:
-    build:
-      context: ./client
-      dockerfile: Dockerfile
-    ports:
-      - "5173:5173"
-    environment:
-      - VITE_QUEUE_API_URL=http://personaplex-backend:8080
-    depends_on:
-      personaplex-backend:
-        condition: service_healthy
-    restart: unless-stopped
+      retries: 5
+      start_period: 120s
 
 volumes:
   huggingface-cache:

@@ -10,7 +10,8 @@ This repository contains the complete PersonaPlex source code plus production-re
 - 🚀 **One-click Brev deployment** with GPU support
 - 🐳 **Local Docker Compose** setup
 - 📚 **Full source code** for deep analysis and customization
-- 🔧 **Backend + Frontend** multi-service architecture
+- 🔧 **Unified Gateway Architecture** (Frontend + Backend in one container)
+- 🔒 **SSL/TLS enabled** for secure WebSocket handshakes
 
 ---
 
@@ -45,8 +46,8 @@ docker-compose up --build
 ```
 
 **Access:**
-- Frontend: http://localhost:5173
-- Backend API: http://localhost:8080
+- **Web UI:** https://localhost:5173 (Self-signed cert)
+- **Backend API:** https://localhost:5173/api (Proxied)
 
 ---
 
@@ -110,17 +111,10 @@ This repo includes the **complete PersonaPlex source code** for deep analysis:
 ### Architecture Overview
 
 ```
-┌─────────────┐     WebSocket      ┌──────────────┐
-│   Client    │ ←─────────────────→ │ Moshi Server │
-│  (Browser)  │   Opus Audio       │  (FastAPI)   │
-└─────────────┘   + Metadata       └──────┬───────┘
-                                          │
-                                          ↓
-                                   ┌──────────────┐
-                                   │ PersonaPlex  │
-                                   │   Model      │
-                                   │  (7B params) │
-                                   └──────────────┘
+┌─────────────┐     HTTPS/WSS      ┌──────────────────┐
+│   Client    │ ←─────────────────→ │  Unified Gateway │
+│  (Browser)  │   Opus Audio       │ (Vite + Moshi)   │
+└─────────────┘   + Metadata       └──────────────────┘
 ```
 
 **Recommended for Deep Dive:**

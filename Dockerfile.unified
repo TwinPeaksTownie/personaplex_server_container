@@ -1,0 +1,53 @@
+ARG BASE_IMAGE="nvcr.io/nvidia/cuda"
+ARG BASE_IMAGE_TAG="12.4.1-runtime-ubuntu22.04"
+
+FROM ${BASE_IMAGE}:${BASE_IMAGE_TAG}
+
+# UV for Python
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+# System deps: build tools, opus codec, Node 20, curl, openssl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config libopus-dev curl openssl \
+    ca-certificates gnupg \
+    && mkdir -p /etc/apt/keyrings \
+    && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+    | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    > /etc/apt/sources.list.d/nodesource.list \
+    && apt-get update && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# --- Python backend ---
+ENV PYTHONUNBUFFERED=1
+WORKDIR /app/moshi
+COPY moshi/ /app/moshi/
+RUN uv venv /app/moshi/.venv --python 3.12 && uv sync
+RUN uv pip install pyloudnorm
+
+# --- Node frontend ---
+WORKDIR /app/client
+COPY client/package*.json ./
+RUN npm ci
+COPY client/ ./
+# Replace upstream .env.local with local-only config
+RUN echo "VITE_QUEUE_API_PATH=/api" > /app/client/.env.local
+RUN npm run build
+
+# --- Gateway (Nginx) ---
+RUN apt-get update && apt-get install -y nginx && rm -rf /var/lib/apt/lists/*
+COPY nginx.conf /etc/nginx/sites-available/default
+
+# Generate self-signed SSL cert for the Nginx gateway
+RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+    -keyout /app/client/key.pem -out /app/client/cert.pem \
+    -subj "/C=US/ST=NC/L=Durham/O=PersonaPlex/CN=localhost"
+
+# --- Orchestration ---
+RUN mkdir -p /app/voices
+COPY scripts/start.sh /app/start.sh
+RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
+
+EXPOSE 5173
+
+ENTRYPOINT ["/app/start.sh"]
