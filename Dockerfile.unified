@@ -44,7 +44,8 @@ RUN openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
     -subj "/C=US/ST=NC/L=Durham/O=PersonaPlex/CN=localhost"
 
 # --- Orchestration ---
-RUN mkdir -p /app/voices
+RUN mkdir -p /app/voices /app/docs
+COPY docs/ /app/docs/
 COPY scripts/start.sh /app/start.sh
 RUN sed -i 's/\r$//' /app/start.sh && chmod +x /app/start.sh
 
