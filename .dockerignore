@@ -18,5 +18,4 @@ voices
 *.pem
 .DS_Store
 README.md
-docs/
 assets/test/
