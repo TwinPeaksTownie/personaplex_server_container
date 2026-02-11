@@ -27,23 +27,51 @@ The PersonaPlex Unified Gateway now uses **Nginx with a self-signed certificate*
 - **Port:** `5173`.
 - **SSL Verification:** Must be **DISABLED** (Allow untrusted certificates).
 
-**Example Logic (Pseudo-code):**
-```swift
-let url = URL(string: "wss://[IP]:5173/api/chat?voice_prompt=LAURA.pt&text_prompt=...")
-var request = URLRequest(url: url!)
-// DISABLE SSL VERIFICATION HERE (using URLSessionDelegate or similar)
+---
+
+## 🤝 3. Connection Flowchart
+The client must follow this exact sequence to successfully stream audio.
+
+```mermaid
+sequenceDiagram
+    participant C as Mac Client
+    participant N as Nginx Gateway (:5173)
+    participant S as Python Backend
+
+    Note over C: 1. Setup Audio Engine
+    C->>C: Init Microphone (Sample Rate: ??)
+    C->>C: Init Resampler (Target: 24kHz Mono)
+    C->>C: Init Opus Encoder (Frame: 20ms)
+
+    Note over C: 2. Connect
+    C->>N: WSS Connect (wss://[IP]:5173/api/chat)
+    Note right of C: MUST Disable SSL Verification
+    N->>S: Proxy Connection
+    S-->>C: Connection Accepted
+
+    Note over C, S: 3. Wait for Handshake
+    loop Wait for 0x00
+        S-->>C: Binary Message [0x00] (Handshake)
+    end
+    
+    C->>C: Handshake Received? -> YES
+
+    Note over C, S: 4. Audio Streaming Loop
+    loop Every 20ms
+        C->>C: Read Mic
+        C->>C: Resample to 24000Hz
+        C->>C: Encode to RAW Opus (No Ogg Header)
+        C->>N: Send Binary [0x01] + [Opus Bytes]
+        N->>S: Proxy Binary
+        
+        alt Invalid Opus / PCM / Ogg Header
+            S-->>S: Log "Opus Decode Error" (Connection stays open but silent)
+        else Valid Raw Opus
+            S->>S: Decode & Inference
+            S-->>C: Return Audio [0x01] + [Bytes]
+        end
+    end
 ```
-
----
-
-## 🤝 3. Connection Protocol
-The client must follow this strict sequence:
-1. **Connect:** Open the `wss` socket.
-2. **Wait for Handshake:** Do NOT send any audio until the server sends back a single byte: `0x00`.
-3. **Stream:** Start sending audio packets (`0x01` + Opus).
-4. **Listen:** Server will return audio bytes (`0x01` + Opus) and text pieces (`0x02` + UTF-8).
-
----
 
 ## 🛠️ Verification Test
 To confirm the client is working:
