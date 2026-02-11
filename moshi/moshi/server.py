@@ -36,6 +36,7 @@ import secrets
 import sys
 from typing import Literal, Optional
 
+import base64
 import json
 import aiohttp
 from aiohttp import web
@@ -186,6 +187,157 @@ class ServerState:
         logger.info(f"Voice uploaded: {safe_name} ({size} bytes)")
         return web.json_response({"status": "ok", "filename": safe_name, "size": size})
 
+    # --- MCP Streamable HTTP endpoint ---
+
+    MCP_TOOLS = [
+        {
+            "name": "health_check",
+            "description": "Check if the PersonaPlex model is loaded and ready for inference.",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "list_voices",
+            "description": "List available voice prompt files (.wav and cached .pt embeddings).",
+            "inputSchema": {"type": "object", "properties": {}},
+        },
+        {
+            "name": "upload_voice",
+            "description": "Upload a WAV voice prompt file (base64-encoded).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "filename": {"type": "string", "description": "Filename for the voice (must end in .wav)"},
+                    "audio_data": {"type": "string", "description": "Base64-encoded WAV file content"},
+                },
+                "required": ["filename", "audio_data"],
+            },
+        },
+        {
+            "name": "launch_voice_chat",
+            "description": (
+                "Get the WebSocket URL and parameters for a voice chat session. "
+                "Connect to the returned URL to start streaming audio. "
+                "The model stays loaded between sessions — only the voice and system prompt change."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "voice_prompt": {"type": "string", "description": "Voice file name (e.g. 'NATF0.pt' or 'custom.wav')"},
+                    "text_prompt": {"type": "string", "description": "System instructions for the AI persona", "default": ""},
+                    "text_temperature": {"type": "number", "description": "Text generation temperature", "default": 0.7},
+                    "audio_temperature": {"type": "number", "description": "Audio generation temperature", "default": 0.8},
+                    "text_topk": {"type": "integer", "description": "Text top-k sampling", "default": 25},
+                    "audio_topk": {"type": "integer", "description": "Audio top-k sampling", "default": 250},
+                },
+                "required": ["voice_prompt"],
+            },
+        },
+    ]
+
+    async def _mcp_tool_call(self, name: str, arguments: dict) -> dict:
+        """Execute an MCP tool and return the result content."""
+        if name == "health_check":
+            return {"content": [{"type": "text", "text": json.dumps({"status": "ok"})}]}
+
+        elif name == "list_voices":
+            voices = []
+            if self.voice_prompt_dir and os.path.isdir(self.voice_prompt_dir):
+                for f in sorted(os.listdir(self.voice_prompt_dir)):
+                    if f.endswith(('.pt', '.wav')):
+                        voices.append(f)
+            return {"content": [{"type": "text", "text": json.dumps({"voices": voices})}]}
+
+        elif name == "upload_voice":
+            filename = arguments.get("filename", "")
+            audio_data = arguments.get("audio_data", "")
+            safe_name = "".join(c for c in filename if c.isalnum() or c in ("_", "-", "."))
+            if not safe_name.lower().endswith(".wav"):
+                return {"content": [{"type": "text", "text": json.dumps({"error": "Filename must end in .wav"})}], "isError": True}
+            if not self.voice_prompt_dir:
+                return {"content": [{"type": "text", "text": json.dumps({"error": "Voice prompt directory not configured"})}], "isError": True}
+            try:
+                raw = base64.b64decode(audio_data)
+            except Exception:
+                return {"content": [{"type": "text", "text": json.dumps({"error": "Invalid base64 audio data"})}], "isError": True}
+            if len(raw) > 50 * 1024 * 1024:
+                return {"content": [{"type": "text", "text": json.dumps({"error": "File too large (max 50MB)"})}], "isError": True}
+            filepath = os.path.join(self.voice_prompt_dir, safe_name)
+            with open(filepath, "wb") as f:
+                f.write(raw)
+            logger.info(f"Voice uploaded via MCP: {safe_name} ({len(raw)} bytes)")
+            return {"content": [{"type": "text", "text": json.dumps({"status": "ok", "filename": safe_name, "size": len(raw)})}]}
+
+        elif name == "launch_voice_chat":
+            voice = arguments.get("voice_prompt", "")
+            text = arguments.get("text_prompt", "")
+            text_temp = arguments.get("text_temperature", 0.7)
+            audio_temp = arguments.get("audio_temperature", 0.8)
+            text_topk = arguments.get("text_topk", 25)
+            audio_topk = arguments.get("audio_topk", 250)
+            # Verify voice file exists
+            if self.voice_prompt_dir:
+                voice_path = os.path.join(self.voice_prompt_dir, voice)
+                if not os.path.exists(voice_path):
+                    return {"content": [{"type": "text", "text": json.dumps({"error": f"Voice file '{voice}' not found"})}], "isError": True}
+            params = (
+                f"voice_prompt={voice}&text_prompt={text}"
+                f"&text_temperature={text_temp}&audio_temperature={audio_temp}"
+                f"&text_topk={text_topk}&audio_topk={audio_topk}"
+                f"&pad_mult=0&repetition_penalty=1.0&repetition_penalty_context=64"
+                f"&text_seed=-1&audio_seed=-1"
+            )
+            ws_url = f"/api/chat?{params}"
+            return {"content": [{"type": "text", "text": json.dumps({
+                "websocket_path": ws_url,
+                "voice_prompt": voice,
+                "text_prompt": text,
+                "protocol": {
+                    "handshake": "Server sends 0x00 when ready",
+                    "client_audio": "0x01 + Opus bytes",
+                    "server_audio": "0x01 + Opus bytes",
+                    "server_text": "0x02 + UTF-8 transcription",
+                },
+            })}]}
+
+        return {"content": [{"type": "text", "text": json.dumps({"error": f"Unknown tool: {name}"})}], "isError": True}
+
+    async def handle_mcp(self, request):
+        """MCP Streamable HTTP endpoint — handles JSON-RPC over POST."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response(
+                {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}},
+                status=400,
+            )
+
+        msg_id = body.get("id")
+        method = body.get("method", "")
+        params = body.get("params", {})
+
+        if method == "initialize":
+            result = {
+                "protocolVersion": "2025-03-26",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "personaplex", "version": "1.0.0"},
+            }
+        elif method == "notifications/initialized":
+            # Client acknowledgement — no response needed but we return success
+            return web.json_response({"jsonrpc": "2.0", "id": msg_id, "result": {}})
+        elif method == "tools/list":
+            result = {"tools": self.MCP_TOOLS}
+        elif method == "tools/call":
+            tool_name = params.get("name", "")
+            arguments = params.get("arguments", {})
+            result = await self._mcp_tool_call(tool_name, arguments)
+        else:
+            return web.json_response(
+                {"jsonrpc": "2.0", "id": msg_id, "error": {"code": -32601, "message": f"Method not found: {method}"}},
+                status=400,
+            )
+
+        return web.json_response({"jsonrpc": "2.0", "id": msg_id, "result": result})
+
     async def handle_chat(self, request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -248,7 +400,16 @@ class ServerState:
                     kind = message[0]
                     if kind == 1:  # audio
                         payload = message[1:]
-                        opus_reader.append_bytes(payload)
+                        try:
+                            try:
+                            opus_reader.append_bytes(payload)
+                        except ValueError:
+                            clog.log("error", "Opus decode error: invalid audio packet received (check client codec)")
+                            # Do not break; just drop the packet to keep connection alive if possible
+                            pass
+                        except ValueError:
+                            clog.log("error", "Opus decode error: invalid audio packet received (check client codec)")
+                            break
                     else:
                         clog.log("warning", f"unknown message kind {kind}")
             finally:
@@ -263,7 +424,7 @@ class ServerState:
                     return
                 await asyncio.sleep(0.001)
                 pcm = opus_reader.read_pcm()
-                if pcm.shape[-1] == 0:
+                if pcm is None or pcm.shape[-1] == 0:
                     continue
                 if all_pcm_data is None:
                     all_pcm_data = pcm
@@ -506,7 +667,7 @@ def main():
         lm=lm,
         device=args.device,
         voice_prompt_dir=args.voice_prompt_dir,
-        save_voice_prompt_embeddings=False,
+        save_voice_prompt_embeddings=True,
     )
     logger.info("warming up the model")
     state.warmup()
@@ -526,6 +687,7 @@ def main():
     app.router.add_get("/api/voices", state.handle_voices)
     app.router.add_post("/api/voices/upload", state.handle_voice_upload)
     app.router.add_get("/api/chat", state.handle_chat)
+    app.router.add_post("/mcp", state.handle_mcp)
     if static_path is not None:
         async def handle_root(_):
             return web.FileResponse(os.path.join(static_path, "index.html"))
