@@ -401,15 +401,11 @@ class ServerState:
                     if kind == 1:  # audio
                         payload = message[1:]
                         try:
-                            try:
                             opus_reader.append_bytes(payload)
                         except ValueError:
                             clog.log("error", "Opus decode error: invalid audio packet received (check client codec)")
                             # Do not break; just drop the packet to keep connection alive if possible
                             pass
-                        except ValueError:
-                            clog.log("error", "Opus decode error: invalid audio packet received (check client codec)")
-                            break
                     else:
                         clog.log("warning", f"unknown message kind {kind}")
             finally:
