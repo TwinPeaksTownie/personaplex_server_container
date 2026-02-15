@@ -43,9 +43,8 @@ NO_TORCH_COMPILE=1
 **Step 3: Jupyter and Networking**
 
 - **Jupyter**: Disable (not needed)
-- **Exposed Ports**: 
-  - `8080` (Backend API)
-  - `5173` (Frontend UI)
+- **Exposed Ports**:
+  - `5173` (Unified gateway — Web UI + API)
 
 ### 5. Select Compute
 
@@ -81,8 +80,8 @@ Once deployed, Brev will provide:
 ### Testing the Deployment
 
 ```bash
-# Check backend health
-curl https://your-instance.brev.dev:8080/health
+# Check health (through Nginx gateway)
+curl -k https://your-instance.brev.dev:5173/health
 
 # Access frontend
 open https://your-instance.brev.dev:5173
@@ -115,7 +114,7 @@ brev ssh <instance-id>
 
 # Once connected, check containers
 docker-compose ps
-docker-compose logs -f personaplex-backend
+docker-compose logs -f personaplex
 ```
 
 ---
@@ -173,7 +172,7 @@ For non-critical workloads:
 brev ssh <instance-id>
 
 # Check build logs
-docker-compose logs personaplex-backend
+docker-compose logs personaplex
 
 # Common fix: Clear cache
 docker-compose down -v
@@ -247,7 +246,7 @@ cd /path/to/personaplex_server_container/voices
 scp Laura.wav <instance-ssh-url>:/path/to/voices/
 
 # Restart backend
-docker-compose restart personaplex-backend
+docker-compose restart personaplex
 ```
 
 ---

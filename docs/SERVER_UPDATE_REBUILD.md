@@ -16,7 +16,7 @@ Problems: cross-origin WebSocket failures, mixed-content SSL errors, two ports t
 ```
 Browser/MCP Client → HTTPS :5173 (single container)
                           │
-                     Vite proxy
+                     Nginx proxy
                           │
                     ┌─────┴─────┐
                     │           │
@@ -40,10 +40,10 @@ One container, one port, SSL terminated at the gateway, MCP-discoverable tools.
 | `moshi/moshi/server.py` | Added MCP endpoint (`POST /mcp`), enabled voice embedding caching |
 | `client/vite.config.ts` | Added `/mcp` proxy, defaulted backend to `localhost:8080`, enabled `ws: true` |
 | `Dockerfile.unified` | **NEW** — single container with Python + Node + CUDA |
-| `docker-compose.unified.yml` | **NEW** — single-service compose with GPU, volumes, health check |
+| `docker-compose.yml` | Updated to use `Dockerfile.unified` (single-service with GPU, volumes, health check) |
 | `scripts/start.sh` | **NEW** — process orchestrator with health checking |
 
-The original files (`Dockerfile`, `Dockerfile.backend`, `client/Dockerfile`, `docker-compose.yml`, `docker-compose.yaml`) are untouched and still work as a fallback.
+The split-mode files (`Dockerfile.backend`, `client/Dockerfile`, `docker-compose.split.yml`) still work as a fallback for debugging.
 
 ---
 
@@ -51,24 +51,24 @@ The original files (`Dockerfile`, `Dockerfile.backend`, `client/Dockerfile`, `do
 
 ### Full rebuild (after code changes)
 ```powershell
-docker compose -f docker-compose.unified.yml build --no-cache
-docker compose -f docker-compose.unified.yml up
+docker compose build --no-cache
+docker compose up
 ```
 
 ### Quick rebuild (Dockerfile/config only, no code changes)
 ```powershell
-docker compose -f docker-compose.unified.yml build
-docker compose -f docker-compose.unified.yml up
+docker compose build
+docker compose up
 ```
 
 ### Stop and remove
 ```powershell
-docker compose -f docker-compose.unified.yml down
+docker compose down
 ```
 
 ### View logs
 ```powershell
-docker compose -f docker-compose.unified.yml logs -f
+docker compose logs -f
 ```
 
 Use `--no-cache` whenever you've changed files that are copied via `COPY` in the Dockerfile (`server.py`, `vite.config.ts`, `start.sh`, etc.). Docker's layer cache may not always detect content changes.
@@ -90,7 +90,7 @@ When the container starts, `start.sh` runs this sequence:
 2. Health check loop (every 2s)
    └── Detects backend crash → exits container
 
-3. Launch Vite gateway (0.0.0.0:5173)
+3. Launch Nginx gateway (0.0.0.0:5173)
    ├── HTTPS with self-signed cert
    ├── Proxies /api/* → localhost:8080 (WebSocket enabled)
    └── Proxies /mcp → localhost:8080
@@ -235,7 +235,7 @@ The MCP `launch_voice_chat` tool is called each time with updated `text_prompt` 
 |-------|----------|-------------|
 | External (port 5173) | HTTPS/WSS | Self-signed, generated at build time |
 | Internal (loopback 8080) | HTTP/WS | None — plain HTTP over localhost |
-| Vite → Python proxy | HTTP | No SSL overhead |
+| Nginx → Python proxy | HTTP | No SSL overhead |
 
 MCP clients connecting to `https://<host>:5173/mcp` must accept the self-signed certificate. Options:
 - `curl -k` / `--insecure`
@@ -246,10 +246,10 @@ MCP clients connecting to `https://<host>:5173/mcp` must accept the self-signed 
 
 ## Fallback to Two-Container Mode
 
-The original architecture still works:
+The split architecture still works for debugging:
 
 ```powershell
-docker compose -f docker-compose.yml up
+docker compose -f docker-compose.split.yml up
 ```
 
-This uses `Dockerfile.backend` + `client/Dockerfile` as two separate containers. The `vite.config.ts` change is backwards-compatible — when `VITE_QUEUE_API_URL` is set (as in the old compose file), it uses that instead of localhost.
+This uses `Dockerfile.backend` + `client/Dockerfile` as two separate containers. The `vite.config.ts` proxy is backwards-compatible — when `VITE_QUEUE_API_URL` is set (as in the split compose file), it uses that instead of localhost.

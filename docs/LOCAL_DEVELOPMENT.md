@@ -71,7 +71,8 @@ docker-compose up --build
 - Download CUDA base image (~2GB)
 - Install dependencies
 - Download PersonaPlex model (~14GB)
-- Start backend and frontend
+- Download built-in voice prompts
+- Start backend + Nginx gateway
 
 **Expect 10-15 minutes for first build.**
 
@@ -80,63 +81,49 @@ docker-compose up --build
 ## Accessing the Application
 
 Once running:
-- **Frontend**: http://localhost:5173
-- **Backend API**: http://localhost:8080
-- **Health Check**: http://localhost:8080/health
+- **Web UI**: https://localhost:5173 (accept the self-signed cert warning)
+- **API (proxied)**: https://localhost:5173/api
+- **Health Check**: https://localhost:5173/health
+
+> **Note:** The backend runs on `127.0.0.1:8080` inside the container and is not exposed externally. All access goes through the Nginx gateway on port 5173.
 
 ---
 
 ## Development Workflow
 
-### Hot Reload (Frontend)
-
-Frontend changes auto-reload. Just edit files in `client/src/`.
-
 ### Backend Changes
 
-After modifying backend code:
+After modifying backend code, rebuild the container:
 ```bash
-docker-compose restart personaplex-backend
+docker-compose up --build
 ```
 
-For dependency changes:
+Or restart the running container:
 ```bash
-docker-compose up --build personaplex-backend
+docker-compose restart personaplex
 ```
 
 ### View Logs
 
 ```bash
-# All services
+# All output (backend + nginx)
 docker-compose logs -f
 
-# Backend only
-docker-compose logs -f personaplex-backend
-
-# Frontend only
-docker-compose logs -f personaplex-frontend
+# Follow logs for the unified container
+docker-compose logs -f personaplex
 ```
 
 ---
 
 ## Debugging
 
-### Enter Backend Container
+### Enter the Container
 
 ```bash
-docker-compose exec personaplex-backend bash
+docker-compose exec personaplex bash
 
 # Inside container:
-python -m moshi.server --help
-```
-
-### Enter Frontend Container
-
-```bash
-docker-compose exec personaplex-frontend sh
-
-# Inside container:
-npm run build
+/app/moshi/.venv/bin/python -m moshi.server --help
 ```
 
 ### Check GPU Usage
@@ -145,8 +132,8 @@ npm run build
 # From host
 nvidia-smi
 
-# From container
-docker-compose exec personaplex-backend nvidia-smi
+# From inside the container
+docker-compose exec personaplex nvidia-smi
 ```
 
 ---
@@ -161,12 +148,12 @@ docker-compose exec personaplex-backend nvidia-smi
    └── MyVoice.wav
    ```
 
-2. Restart backend:
+2. Restart the container:
    ```bash
-   docker-compose restart personaplex-backend
+   docker-compose restart personaplex
    ```
 
-3. Use in frontend by selecting "MyVoice" from dropdown
+3. The voice will appear in the frontend dropdown (fetched dynamically from `/api/voices`)
 
 ---
 
@@ -174,19 +161,18 @@ docker-compose exec personaplex-backend nvidia-smi
 
 ### Enable CPU Offload
 
-For GPUs with <24GB VRAM, edit `docker-compose.yml`:
+For GPUs with <24GB VRAM, edit `scripts/start.sh` and add `--cpu-offload` to the python command:
 
-```yaml
-services:
-  personaplex-backend:
-    command: [
-      "/app/moshi/.venv/bin/python", "-m", "moshi.server",
-      "--voice-prompt-dir", "/app/voices",
-      "--host", "0.0.0.0",
-      "--port", "8080",
-      "--cpu-offload"  # Add this line
-    ]
+```bash
+/app/moshi/.venv/bin/python -m moshi.server \
+    --host 127.0.0.1 \
+    --port 8080 \
+    --static none \
+    --voice-prompt-dir /app/voices \
+    --cpu-offload &
 ```
+
+Then rebuild: `docker-compose up --build`
 
 ### Disable Torch Compilation
 
@@ -196,6 +182,20 @@ NO_TORCH_COMPILE=1
 ```
 
 This speeds up startup by ~2 minutes.
+
+---
+
+## Split Mode (Two Containers)
+
+For debugging backend and frontend separately, use the split compose file:
+
+```bash
+docker-compose -f docker-compose.split.yml up --build
+```
+
+This runs:
+- `personaplex-backend` on port 8080 (backend only)
+- `personaplex-frontend` on port 5173 (Vite dev server)
 
 ---
 
@@ -227,13 +227,13 @@ docker system prune -a
 
 ### Port Already in Use
 
-**Error**: `Bind for 0.0.0.0:8080 failed: port is already allocated`
+**Error**: `Bind for 0.0.0.0:5173 failed: port is already allocated`
 
 **Solution**:
 ```bash
 # Find process using port
-netstat -ano | findstr :8080  # Windows
-lsof -i :8080                 # Linux/Mac
+netstat -ano | findstr :5173  # Windows
+lsof -i :5173                 # Linux/Mac
 
 # Kill process or change port in docker-compose.yml
 ```
@@ -247,17 +247,15 @@ lsof -i :8080                 # Linux/Mac
 2. Enable CPU offload (see Performance Tuning)
 3. Use a GPU with more VRAM
 
-### Frontend Can't Connect
-
-**Error**: `WebSocket connection failed`
+### WebSocket Connection Fails
 
 **Solution**:
 ```bash
-# Check backend is running
-curl http://localhost:8080/health
+# Check backend health through the gateway
+curl -k https://localhost:5173/health
 
-# Check VITE_QUEUE_API_URL in .env
-# Should be: http://personaplex-backend:8080
+# Check container logs for errors
+docker-compose logs personaplex | grep -i error
 ```
 
 ---
@@ -269,24 +267,30 @@ curl http://localhost:8080/health
 ```
 moshi/
 ├── moshi/
-│   ├── server.py          # FastAPI WebSocket server
-│   ├── models.py          # Model loading & inference
-│   ├── audio.py           # Opus codec handling
-│   ├── prompt.py          # Voice/text prompt management
-│   └── utils.py           # Utilities
-└── pyproject.toml         # Dependencies
+│   ├── server.py              # aiohttp server (WebSocket chat, voices, MCP, health)
+│   ├── models/
+│   │   ├── loaders.py         # Model downloading & initialization
+│   │   ├── lm.py              # Language model (LMModel, LMGen)
+│   │   └── compression.py     # Mimi audio codec
+│   ├── modules/               # Neural network building blocks (transformer, seanet, etc.)
+│   ├── quantization/          # Vector quantization (VQ)
+│   ├── utils/                 # Utilities (connection, compile, autocast, logging, sampling)
+│   ├── client_utils.py        # Client utilities
+│   └── offline.py             # Offline inference mode
+└── pyproject.toml             # Dependencies
 ```
 
 ### Key Entry Points
 
-1. **WebSocket Handler**: `moshi/moshi/server.py:handle_websocket()`
-2. **Model Inference**: `moshi/moshi/models.py:PersonaPlexModel.generate()`
-3. **Audio Processing**: `moshi/moshi/audio.py:OpusEncoder`
+1. **WebSocket Handler**: `moshi/moshi/server.py` → `ServerState.handle_chat()`
+2. **Model Inference**: `moshi/moshi/models/lm.py` → `LMGen.step()`
+3. **Audio Codec**: `moshi/moshi/models/compression.py` → Mimi model (encode/decode)
+4. **Opus Streaming**: Uses `sphn` library (`OpusStreamReader` / `OpusStreamWriter`)
 
 ### Running Tests
 
 ```bash
-docker-compose exec personaplex-backend bash -c "cd /app/moshi && python -m pytest"
+docker-compose exec personaplex bash -c "cd /app/moshi && /app/moshi/.venv/bin/python -m pytest"
 ```
 
 ---
@@ -294,5 +298,5 @@ docker-compose exec personaplex-backend bash -c "cd /app/moshi && python -m pyte
 ## Next Steps
 
 - Read [BREV_DEPLOYMENT.md](BREV_DEPLOYMENT.md) for cloud deployment
-- Explore [API_REFERENCE.md](../API_REFERENCE.md) for WebSocket protocol
-- Run DeepWiki on this repo for comprehensive documentation
+- See [UNIFIED_GATEWAY_BUILD.md](UNIFIED_GATEWAY_BUILD.md) for full API reference and binary protocol
+- See [SERVER_UPDATE_REBUILD.md](SERVER_UPDATE_REBUILD.md) for MCP endpoint documentation

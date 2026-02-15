@@ -2,7 +2,7 @@
 
 ## What This Is
 
-A single Docker container that runs the PersonaPlex 7B voice AI model behind a Vite HTTPS gateway. One exposed port (5173), one container, GPU-accelerated inference with per-connection voice and persona swapping.
+A single Docker container that runs the PersonaPlex 7B voice AI model behind an Nginx HTTPS gateway. One exposed port (5173), one container, GPU-accelerated inference with per-connection voice and persona swapping.
 
 ## Prerequisites
 
@@ -19,15 +19,14 @@ HF_TOKEN=hf_your_token_here
 
 2. Build and run:
 ```bash
-docker compose -f docker-compose.unified.yml build
-docker compose -f docker-compose.unified.yml up
+docker compose build
+docker compose up
 ```
 
 3. Wait for logs to show:
 ```
 Moshi backend is ready.
-VITE v5.x.x ready in XXX ms
-  ➜  Local:   https://localhost:5173/
+Starting Nginx gateway on port 5173...
 ```
 
 4. Open `https://<host-ip>:5173` in a browser (accept the self-signed cert).
@@ -43,11 +42,11 @@ First startup downloads ~14GB of model weights from HuggingFace. This is cached 
 │  Docker Container                               │
 │                                                 │
 │  ┌─────────────────────┐                        │
-│  │  Vite Gateway       │  ← HTTPS :5173         │
-│  │  (Node/React UI)    │     (only exposed port) │
+│  │  Nginx Gateway      │  ← HTTPS :5173         │
+│  │  (static React UI)  │     (only exposed port) │
 │  │                     │                        │
 │  │  /api/* proxy ──────┼──► 127.0.0.1:8080      │
-│  │  (ws: true)         │                        │
+│  │  (WebSocket)        │                        │
 │  └─────────────────────┘                        │
 │                                                 │
 │  ┌─────────────────────┐                        │
@@ -68,7 +67,7 @@ First startup downloads ~14GB of model weights from HuggingFace. This is cached 
 
 ## API Endpoints
 
-All endpoints are accessed through the Vite gateway on port 5173.
+All endpoints are accessed through the Nginx gateway on port 5173.
 
 ### `GET /health`
 Health check. Returns `{"status": "ok"}` when the model is loaded.
@@ -182,7 +181,7 @@ The model stays loaded in VRAM at all times. Only voice embeddings and text prom
 ```
 personaplex_server_container/
 ├── Dockerfile.unified          # Unified container build
-├── docker-compose.unified.yml  # Single-service compose
+├── docker-compose.yml          # Single-service compose
 ├── scripts/
 │   └── start.sh                # Process orchestration
 ├── .env                        # HF_TOKEN goes here
@@ -208,18 +207,24 @@ personaplex_server_container/
 
 ## Key Configuration Files
 
-### `client/vite.config.ts`
+### `nginx.conf`
+- SSL termination with self-signed cert (generated at build time)
+- Proxies `/api/*` → `http://127.0.0.1:8080` with WebSocket upgrade support
+- Proxies `/mcp` and `/health` → backend
+- Serves static React build from `/app/client/dist`
+
+### `client/vite.config.ts` *(dev/split mode only)*
 - Proxy: `/api/*` → `http://127.0.0.1:8080` (default) or `VITE_QUEUE_API_URL` env var
-- SSL: Self-signed cert generated at build time
 - WebSocket proxying enabled (`ws: true`)
+- Only used when running `npm run dev` or in split-container mode
 
 ### `scripts/start.sh`
-- Starts Python backend on loopback, waits for `/health`, then starts Vite
+- Starts Python backend on loopback, waits for `/health`, then starts Nginx
 - Detects backend crash during startup
 - `wait -n` catches first process death and kills the other
 - `trap` handles SIGTERM for clean Docker stop
 
-### `docker-compose.unified.yml`
+### `docker-compose.yml`
 - `start_period: 120s` — model loading grace period before health checks count
 - Health check hits `https://localhost:5173 --insecure` (proves both processes are up)
 - GPU reservation via NVIDIA Container Toolkit
@@ -244,7 +249,7 @@ personaplex_server_container/
 | `exec /app/start.sh: no such file or directory` | Windows line endings in start.sh | Rebuild with `--no-cache` (sed fix is in Dockerfile) |
 | Container exits during model load | OOM — not enough VRAM | Need GPU with >= 16GB VRAM |
 | `401` on startup | Bad or missing HF_TOKEN | Check `.env` file, accept model license on HuggingFace |
-| WebSocket connection fails | Vite proxy not forwarding WS | Verify `ws: true` in `vite.config.ts` |
+| WebSocket connection fails | Nginx proxy not forwarding WS | Check `nginx.conf` for WebSocket upgrade headers |
 | Voice file not found | Filename mismatch | Check `/api/voices` for available files |
 | Slow first connection with custom voice | `.wav` being encoded for the first time | Normal — `.pt` cache will be created for next time |
 | Health check failing | Model still loading | Wait for `start_period` (120s), check logs |

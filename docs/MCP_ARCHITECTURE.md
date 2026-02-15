@@ -1,5 +1,9 @@
 # PersonaPlex MCP: Streamable HTTP Architecture
 
+> **Note:** This is the **original design document**. The implemented MCP API differs in endpoint and tool names. See [SERVER_UPDATE_REBUILD.md](SERVER_UPDATE_REBUILD.md) for the actual implementation details:
+> - Endpoint: `POST /mcp` (not `/mcp/stream`)
+> - Implemented tools: `health_check`, `list_voices`, `upload_voice`, `launch_voice_chat`
+
 This document defines the transition of the PersonaPlex Backend from a simple WebSocket demo into a formal **MCP (Model Context Protocol) Server** using **Streamable HTTP**.
 
 ## 🎯 The Objective

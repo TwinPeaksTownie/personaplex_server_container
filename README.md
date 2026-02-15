@@ -55,24 +55,34 @@ docker-compose up --build
 
 ```
 personaplex_server_container/
-├── docker-compose.yml          # Multi-service orchestration
-├── Dockerfile.backend          # Backend container (Moshi server)
+├── docker-compose.yml          # Primary unified deployment (single container)
+├── docker-compose.split.yml    # Alternative: separate backend + frontend containers
+├── Dockerfile.unified          # Primary: Python + Node + Nginx in one container
+├── Dockerfile.backend          # Backend-only container (for split mode)
+├── nginx.conf                  # Nginx gateway config (SSL :5173 → backend :8080)
+├── scripts/
+│   └── start.sh                # Container startup orchestration
 ├── .env.example                # Environment template
 │
-├── moshi/                      # Backend source code
-│   ├── moshi/                  # Python package
-│   │   ├── server.py          # WebSocket server
-│   │   ├── models.py          # Model loading & inference
-│   │   └── ...
-│   └── pyproject.toml         # Python dependencies
+├── moshi/                      # Backend source code (aiohttp + PyTorch)
+│   ├── moshi/
+│   │   ├── server.py           # aiohttp server (WebSocket chat, voices, MCP, health)
+│   │   ├── models/
+│   │   │   ├── loaders.py      # Model downloading & initialization
+│   │   │   ├── lm.py           # Language model inference (LMModel, LMGen)
+│   │   │   └── compression.py  # Mimi audio codec
+│   │   ├── modules/            # Neural network building blocks
+│   │   ├── quantization/       # Vector quantization
+│   │   └── utils/              # Utilities (connection, compile, autocast, etc.)
+│   └── pyproject.toml          # Python dependencies
 │
-├── client/                     # Frontend source code
-│   ├── src/                   # React/TypeScript app
-│   ├── Dockerfile             # Frontend container
-│   └── package.json           # Node dependencies
+├── client/                     # Frontend source code (React/TypeScript)
+│   ├── src/                    # React app
+│   ├── Dockerfile              # Frontend container (for split mode)
+│   └── package.json            # Node dependencies
 │
-├── voices/                     # Voice prompt embeddings (optional)
-└── docs/                       # Additional documentation
+├── voices/                     # Voice prompt embeddings (host-mounted volume)
+└── docs/                       # Deployment and architecture guides
 ```
 
 ---
@@ -84,8 +94,8 @@ personaplex_server_container/
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `HF_TOKEN` | ✅ Yes | Hugging Face token ([get one](https://huggingface.co/settings/tokens)) |
-| `VITE_QUEUE_API_URL` | No | Backend URL (default: `http://personaplex-backend:8080`) |
 | `NO_TORCH_COMPILE` | No | Set to `1` for faster startup (recommended) |
+| `VITE_QUEUE_API_URL` | No | Backend URL override (split mode only, via `docker-compose.split.yml`) |
 
 ### GPU Requirements
 
@@ -103,24 +113,24 @@ This repo includes the **complete PersonaPlex source code** for deep analysis:
 
 ### Key Backend Components
 
-1. **`moshi/moshi/server.py`** - WebSocket server handling real-time audio streaming
-2. **`moshi/moshi/models.py`** - Model loading, inference, and voice conditioning
-3. **`moshi/moshi/audio.py`** - Opus codec handling and audio processing
-4. **`moshi/moshi/prompt.py`** - Text and voice prompt management
+1. **`moshi/moshi/server.py`** - aiohttp server: WebSocket chat, voice management, MCP endpoint, health checks
+2. **`moshi/moshi/models/loaders.py`** - Model downloading from HuggingFace and initialization
+3. **`moshi/moshi/models/lm.py`** - Language model inference (LMModel, LMGen), voice prompt caching
+4. **`moshi/moshi/models/compression.py`** - Mimi audio codec (PCM ↔ tokens)
 
 ### Architecture Overview
 
 ```
 ┌─────────────┐     HTTPS/WSS      ┌──────────────────┐
 │   Client    │ ←─────────────────→ │  Unified Gateway │
-│  (Browser)  │   Opus Audio       │ (Vite + Moshi)   │
+│  (Browser)  │   Opus Audio       │ (Nginx + Moshi)  │
 └─────────────┘   + Metadata       └──────────────────┘
 ```
 
 **Recommended for Deep Dive:**
-- Run [DeepWiki](https://github.com/deepwiki/deepwiki) on this repo to generate comprehensive documentation
-- Start with `moshi/moshi/server.py` to understand the WebSocket protocol
-- Explore `moshi/moshi/models.py` for model inference details
+- Start with `moshi/moshi/server.py` to understand the WebSocket protocol and API endpoints
+- Explore `moshi/moshi/models/loaders.py` for model initialization and `models/lm.py` for inference
+- See `docs/UNIFIED_GATEWAY_BUILD.md` for full API reference and binary protocol docs
 
 ---
 
@@ -150,16 +160,19 @@ voices/
 docker run --rm --gpus all nvidia/cuda:12.4.1-runtime-ubuntu22.04 nvidia-smi
 
 # Check logs
-docker-compose logs personaplex-backend
+docker-compose logs personaplex
 ```
 
-### Frontend can't connect to backend
-- Ensure `VITE_QUEUE_API_URL` uses the service name `personaplex-backend` (not `localhost`)
-- Check health status: `curl http://localhost:8080/health`
+### Browser shows SSL warning
+This is expected — the container uses a self-signed certificate. Click **"Advanced"** → **"Proceed to localhost"** to continue.
+
+### WebSocket connection fails
+- Check health: `curl -k https://localhost:5173/health`
+- Check that the backend started: `docker-compose logs personaplex | grep "backend is ready"`
 
 ### Out of memory errors
 - Use a GPU with more VRAM
-- Enable CPU offload: add `--cpu-offload` to the backend command in `docker-compose.yml`
+- Enable CPU offload: add `--cpu-offload` to the python command in `scripts/start.sh`
 
 ---
 
