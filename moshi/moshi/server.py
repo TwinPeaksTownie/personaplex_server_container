@@ -27,6 +27,7 @@
 import argparse
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import random
 import os
 from pathlib import Path
@@ -34,6 +35,7 @@ import tarfile
 import time
 import secrets
 import sys
+import uuid
 from typing import Literal, Optional
 
 import base64
@@ -117,6 +119,26 @@ class ServerState:
         self.mimi.streaming_forever(1)
         self.other_mimi.streaming_forever(1)
         self.lm_gen.streaming_forever(1)
+
+        # Session management for voice collaboration skill
+        self.sessions: dict[str, dict] = {}
+        self.active_session: Optional[str] = None
+
+        # Whisper ASR for user speech transcription
+        self._whisper_model = None
+        self._whisper_ready = False
+        try:
+            from faster_whisper import WhisperModel
+            logger.info("Loading faster-whisper 'small' model for user ASR...")
+            self._whisper_model = WhisperModel(
+                "small",
+                device="cuda" if torch.cuda.is_available() else "cpu",
+                compute_type="float16" if torch.cuda.is_available() else "int8",
+            )
+            self._whisper_ready = True
+            logger.info("Whisper ASR model loaded successfully")
+        except Exception as e:
+            logger.warning(f"Could not load Whisper ASR model: {e}. User transcription will be unavailable.")
     
     def warmup(self):
         for _ in range(4):
@@ -133,6 +155,122 @@ class ServerState:
         if self.device.type == 'cuda':
             torch.cuda.synchronize()
 
+
+    # --- Session management endpoints ---
+
+    def _create_session(self, voice_prompt: str, text_prompt: str, **kwargs) -> dict:
+        """Create a new session dict and store it."""
+        session_id = str(uuid.uuid4())
+        text_temp = kwargs.get("text_temperature", 0.7)
+        audio_temp = kwargs.get("audio_temperature", 0.8)
+        text_topk = kwargs.get("text_topk", 25)
+        audio_topk = kwargs.get("audio_topk", 250)
+
+        params = (
+            f"voice_prompt={voice_prompt}&text_prompt={text_prompt}"
+            f"&text_temperature={text_temp}&audio_temperature={audio_temp}"
+            f"&text_topk={text_topk}&audio_topk={audio_topk}"
+            f"&pad_mult=0&repetition_penalty=1.0&repetition_penalty_context=64"
+            f"&text_seed=-1&audio_seed=-1"
+            f"&session_id={session_id}"
+        )
+
+        session = {
+            "session_id": session_id,
+            "status": "waiting",
+            "voice_prompt": voice_prompt,
+            "text_prompt": text_prompt,
+            "transcript": [],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "started_at": None,
+            "ended_at": None,
+            "websocket_url": f"/api/chat?{params}",
+        }
+        self.sessions[session_id] = session
+        return session
+
+    def _format_session(self, session: dict) -> dict:
+        """Add computed fields to a session for API responses."""
+        out = dict(session)
+        # Compute duration
+        if session["started_at"] and session["ended_at"]:
+            try:
+                started = datetime.fromisoformat(session["started_at"])
+                ended = datetime.fromisoformat(session["ended_at"])
+                out["duration_seconds"] = round((ended - started).total_seconds(), 1)
+            except Exception:
+                out["duration_seconds"] = None
+        else:
+            out["duration_seconds"] = None
+        # Compute full_transcript string
+        lines = []
+        for entry in session["transcript"]:
+            speaker = "AI" if entry["speaker"] == "ai" else "User"
+            lines.append(f"{speaker}: {entry['text']}")
+        out["full_transcript"] = "\n".join(lines)
+        out["word_count"] = sum(len(entry["text"].split()) for entry in session["transcript"])
+        return out
+
+    async def handle_session_start(self, request):
+        """POST /api/sessions/start — Create a new voice collaboration session."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "Invalid JSON body"}, status=400)
+
+        voice_prompt = body.get("voice_prompt", "")
+        text_prompt = body.get("text_prompt", "")
+        if not voice_prompt:
+            return web.json_response({"error": "voice_prompt is required"}, status=400)
+
+        # Verify voice file exists
+        if self.voice_prompt_dir:
+            voice_path = os.path.join(self.voice_prompt_dir, voice_prompt)
+            if not os.path.exists(voice_path):
+                return web.json_response({"error": f"Voice file '{voice_prompt}' not found"}, status=404)
+
+        session = self._create_session(
+            voice_prompt=voice_prompt,
+            text_prompt=text_prompt,
+            text_temperature=body.get("text_temperature", 0.7),
+            audio_temperature=body.get("audio_temperature", 0.8),
+            text_topk=body.get("text_topk", 25),
+            audio_topk=body.get("audio_topk", 250),
+        )
+        logger.info(f"Session created: {session['session_id']}")
+        return web.json_response(self._format_session(session))
+
+    async def handle_session_get(self, request):
+        """GET /api/sessions/{id} — Get session status and transcript."""
+        session_id = request.match_info["id"]
+        session = self.sessions.get(session_id)
+        if not session:
+            return web.json_response({"error": "Session not found"}, status=404)
+        return web.json_response(self._format_session(session))
+
+    async def handle_session_stop(self, request):
+        """POST /api/sessions/{id}/stop — Signal active session to end gracefully."""
+        session_id = request.match_info["id"]
+        session = self.sessions.get(session_id)
+        if not session:
+            return web.json_response({"error": "Session not found"}, status=404)
+        if session["status"] not in ("waiting", "active"):
+            return web.json_response({"error": f"Session is already {session['status']}"}, status=400)
+        session["status"] = "stopped"
+        session["ended_at"] = datetime.now(timezone.utc).isoformat()
+        if self.active_session == session_id:
+            self.active_session = None
+        logger.info(f"Session stopped: {session_id}")
+        return web.json_response(self._format_session(session))
+
+    async def handle_sessions_list(self, request):
+        """GET /api/sessions — List recent sessions."""
+        sessions = sorted(
+            self.sessions.values(),
+            key=lambda s: s["created_at"],
+            reverse=True,
+        )[:50]  # Last 50 sessions
+        return web.json_response([self._format_session(s) for s in sessions])
 
     async def handle_health(self, request):
         """Health check endpoint."""
@@ -232,6 +370,47 @@ class ServerState:
                 "required": ["voice_prompt"],
             },
         },
+        {
+            "name": "start_voice_session",
+            "description": (
+                "Start a tracked voice collaboration session with transcript recording. "
+                "Returns a session_id and WebSocket URL. After the user connects and talks, "
+                "poll get_session to retrieve the full bidirectional transcript (both AI and user speech). "
+                "Use this for collaborative planning, brainstorming, or gathering detailed user intent."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "voice_prompt": {"type": "string", "description": "Voice file name (e.g. 'NATF0.pt' or 'custom.wav')"},
+                    "text_prompt": {"type": "string", "description": "System instructions for the AI persona", "default": ""},
+                    "text_temperature": {"type": "number", "description": "Text generation temperature", "default": 0.7},
+                    "audio_temperature": {"type": "number", "description": "Audio generation temperature", "default": 0.8},
+                },
+                "required": ["voice_prompt"],
+            },
+        },
+        {
+            "name": "get_session",
+            "description": "Get the status and full transcript of a voice collaboration session.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "The session ID returned by start_voice_session"},
+                },
+                "required": ["session_id"],
+            },
+        },
+        {
+            "name": "stop_session",
+            "description": "Signal an active voice session to end gracefully.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "The session ID to stop"},
+                },
+                "required": ["session_id"],
+            },
+        },
     ]
 
     async def _mcp_tool_call(self, name: str, arguments: dict) -> dict:
@@ -299,6 +478,45 @@ class ServerState:
                 },
             })}]}
 
+        elif name == "start_voice_session":
+            voice = arguments.get("voice_prompt", "")
+            text = arguments.get("text_prompt", "")
+            if not voice:
+                return {"content": [{"type": "text", "text": json.dumps({"error": "voice_prompt is required"})}], "isError": True}
+            if self.voice_prompt_dir:
+                voice_path = os.path.join(self.voice_prompt_dir, voice)
+                if not os.path.exists(voice_path):
+                    return {"content": [{"type": "text", "text": json.dumps({"error": f"Voice file '{voice}' not found"})}], "isError": True}
+            session = self._create_session(
+                voice_prompt=voice,
+                text_prompt=text,
+                text_temperature=arguments.get("text_temperature", 0.7),
+                audio_temperature=arguments.get("audio_temperature", 0.8),
+            )
+            logger.info(f"Session created via MCP: {session['session_id']}")
+            return {"content": [{"type": "text", "text": json.dumps(self._format_session(session))}]}
+
+        elif name == "get_session":
+            session_id = arguments.get("session_id", "")
+            session = self.sessions.get(session_id)
+            if not session:
+                return {"content": [{"type": "text", "text": json.dumps({"error": "Session not found"})}], "isError": True}
+            return {"content": [{"type": "text", "text": json.dumps(self._format_session(session))}]}
+
+        elif name == "stop_session":
+            session_id = arguments.get("session_id", "")
+            session = self.sessions.get(session_id)
+            if not session:
+                return {"content": [{"type": "text", "text": json.dumps({"error": "Session not found"})}], "isError": True}
+            if session["status"] not in ("waiting", "active"):
+                return {"content": [{"type": "text", "text": json.dumps({"error": f"Session is already {session['status']}"})}], "isError": True}
+            session["status"] = "stopped"
+            session["ended_at"] = datetime.now(timezone.utc).isoformat()
+            if self.active_session == session_id:
+                self.active_session = None
+            logger.info(f"Session stopped via MCP: {session_id}")
+            return {"content": [{"type": "text", "text": json.dumps(self._format_session(session))}]}
+
         return {"content": [{"type": "text", "text": json.dumps({"error": f"Unknown tool: {name}"})}], "isError": True}
 
     async def handle_mcp(self, request):
@@ -338,6 +556,33 @@ class ServerState:
 
         return web.json_response({"jsonrpc": "2.0", "id": msg_id, "result": result})
 
+    def _whisper_transcribe(self, pcm_float32_24k: np.ndarray) -> str:
+        """Run Whisper ASR on a chunk of 24kHz float32 PCM. Returns transcribed text."""
+        if not self._whisper_ready or self._whisper_model is None:
+            return ""
+        try:
+            # faster-whisper expects float32 numpy array at 16kHz
+            # Resample from 24kHz to 16kHz using simple linear interpolation
+            duration = len(pcm_float32_24k) / 24000
+            target_len = int(duration * 16000)
+            if target_len < 160:  # Less than 10ms of audio, skip
+                return ""
+            indices = np.linspace(0, len(pcm_float32_24k) - 1, target_len)
+            pcm_16k = np.interp(indices, np.arange(len(pcm_float32_24k)), pcm_float32_24k).astype(np.float32)
+
+            segments, _ = self._whisper_model.transcribe(
+                pcm_16k,
+                beam_size=1,
+                language="en",
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=300),
+            )
+            text = " ".join(seg.text.strip() for seg in segments).strip()
+            return text
+        except Exception as e:
+            logger.warning(f"Whisper transcription error: {e}")
+            return ""
+
     async def handle_chat(self, request):
         ws = web.WebSocketResponse()
         await ws.prepare(request)
@@ -346,11 +591,16 @@ class ServerState:
         peer_port = request.transport.get_extra_info("peername")[1]  # Port
         clog.log("info", f"Incoming connection from {peer}:{peer_port}")
 
-        # self.lm_gen.temp = float(request.query["audio_temperature"])
-        # self.lm_gen.temp_text = float(request.query["text_temperature"])
-        # self.lm_gen.top_k_text = max(1, int(request.query["text_topk"]))
-        # self.lm_gen.top_k = max(1, int(request.query["audio_topk"]))
-        
+        # Session tracking — optional session_id query param
+        session_id = request.query.get("session_id")
+        session = self.sessions.get(session_id) if session_id else None
+        if session:
+            session["status"] = "active"
+            session["started_at"] = datetime.now(timezone.utc).isoformat()
+            self.active_session = session_id
+            clog.log("info", f"Session activated: {session_id}")
+        session_start_time = time.time()
+
         # Construct full voice prompt path
         requested_voice_prompt_path = None
         voice_prompt_path = None
@@ -366,7 +616,7 @@ class ServerState:
                 )
             else:
                 voice_prompt_path = requested_voice_prompt_path
-                
+
         if self.lm_gen.voice_prompt != voice_prompt_path:
             if voice_prompt_path.endswith('.pt'):
                 # Load pre-saved voice prompt embeddings
@@ -375,6 +625,9 @@ class ServerState:
                 self.lm_gen.load_voice_prompt(voice_prompt_path)
         self.lm_gen.text_prompt_tokens = self.text_tokenizer.encode(wrap_with_system_tags(request.query["text_prompt"])) if len(request.query["text_prompt"]) > 0 else None
         seed = int(request["seed"]) if "seed" in request.query else None
+
+        # AI text accumulation buffer (tokens arrive one at a time)
+        ai_text_buffer = []
 
         async def recv_loop():
             nonlocal close
@@ -413,19 +666,66 @@ class ServerState:
                 clog.log("info", "connection closed")
 
         async def opus_loop():
+            nonlocal ai_text_buffer
             all_pcm_data = None
+
+            # Whisper ASR state: accumulate user PCM for periodic transcription
+            user_pcm_buffer = np.array([], dtype=np.float32)
+            whisper_interval_samples = int(3.0 * self.mimi.sample_rate)  # ~3 seconds of audio
+            last_whisper_time = time.time()
 
             while True:
                 if close:
+                    # Flush remaining AI text buffer to transcript
+                    if session and ai_text_buffer:
+                        text = "".join(ai_text_buffer).strip()
+                        if text:
+                            session["transcript"].append({
+                                "speaker": "ai", "text": text,
+                                "t": round(time.time() - session_start_time, 1),
+                            })
+                        ai_text_buffer.clear()
+                    # Flush remaining user audio through Whisper
+                    if session and len(user_pcm_buffer) > 4800:  # >0.2s
+                        text = await asyncio.get_event_loop().run_in_executor(
+                            None, self._whisper_transcribe, user_pcm_buffer
+                        )
+                        if text:
+                            session["transcript"].append({
+                                "speaker": "user", "text": text,
+                                "t": round(time.time() - session_start_time, 1),
+                            })
                     return
                 await asyncio.sleep(0.001)
                 pcm = opus_reader.read_pcm()
                 if pcm is None or pcm.shape[-1] == 0:
                     continue
+
+                # Accumulate user audio for Whisper ASR
+                if session:
+                    user_pcm_buffer = np.concatenate((user_pcm_buffer, pcm))
+
                 if all_pcm_data is None:
                     all_pcm_data = pcm
                 else:
                     all_pcm_data = np.concatenate((all_pcm_data, pcm))
+
+                # Periodically run Whisper on accumulated user audio
+                if session and self._whisper_ready and len(user_pcm_buffer) >= whisper_interval_samples:
+                    now = time.time()
+                    if now - last_whisper_time >= 2.0:  # At least 2s between Whisper runs
+                        buffer_to_transcribe = user_pcm_buffer.copy()
+                        user_pcm_buffer = np.array([], dtype=np.float32)
+                        last_whisper_time = now
+                        text = await asyncio.get_event_loop().run_in_executor(
+                            None, self._whisper_transcribe, buffer_to_transcribe
+                        )
+                        if text:
+                            session["transcript"].append({
+                                "speaker": "user", "text": text,
+                                "t": round(now - session_start_time, 1),
+                            })
+
                 while all_pcm_data.shape[-1] >= self.frame_size:
                     be = time.time()
                     chunk = all_pcm_data[: self.frame_size]
@@ -449,7 +749,19 @@ class ServerState:
                             _text = _text.replace("▁", " ")
                             msg = b"\x02" + bytes(_text, encoding="utf8")
                             await ws.send_bytes(msg)
+                            # Accumulate AI text for session transcript
+                            if session:
+                                ai_text_buffer.append(_text)
                         else:
+                            # Token boundary (PAD/EOS) — flush AI text buffer as a transcript entry
+                            if session and ai_text_buffer:
+                                text = "".join(ai_text_buffer).strip()
+                                if text:
+                                    session["transcript"].append({
+                                        "speaker": "ai", "text": text,
+                                        "t": round(time.time() - session_start_time, 1),
+                                    })
+                                ai_text_buffer.clear()
                             text_token_map = ['EPAD', 'BOS', 'EOS', 'PAD']
 
         async def send_loop():
@@ -478,6 +790,9 @@ class ServerState:
             self.lm_gen.reset_streaming()
             async def is_alive():
                 if close or ws.closed:
+                    return False
+                # Also check if session was stopped externally
+                if session and session["status"] == "stopped":
                     return False
                 try:
                     # Check for disconnect without waiting too long
@@ -515,7 +830,15 @@ class ServerState:
                         pass
                 await ws.close()
                 clog.log("info", "session closed")
-                # await asyncio.gather(opus_loop(), recv_loop(), send_loop())
+
+        # Finalize session on disconnect
+        if session and session["status"] == "active":
+            session["status"] = "completed"
+            session["ended_at"] = datetime.now(timezone.utc).isoformat()
+            if self.active_session == session_id:
+                self.active_session = None
+            clog.log("info", f"Session completed: {session_id} ({len(session['transcript'])} transcript entries)")
+
         clog.log("info", "done with connection")
         return ws
 
@@ -684,6 +1007,11 @@ def main():
     app.router.add_post("/api/voices/upload", state.handle_voice_upload)
     app.router.add_get("/api/chat", state.handle_chat)
     app.router.add_post("/mcp", state.handle_mcp)
+    # Session management endpoints
+    app.router.add_post("/api/sessions/start", state.handle_session_start)
+    app.router.add_get("/api/sessions/{id}", state.handle_session_get)
+    app.router.add_post("/api/sessions/{id}/stop", state.handle_session_stop)
+    app.router.add_get("/api/sessions", state.handle_sessions_list)
     if static_path is not None:
         async def handle_root(_):
             return web.FileResponse(os.path.join(static_path, "index.html"))
