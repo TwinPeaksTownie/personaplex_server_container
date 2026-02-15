@@ -46,6 +46,13 @@ voices/*.pt
 *.swo
 .DS_Store
 
+# Agent/AI tool state
+.agent/
+.claude/
+
+# Windows artifacts
+nul
+
 # Testing
 .pytest_cache/
 coverage/

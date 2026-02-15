@@ -1,5 +1,5 @@
 import moshiProcessorUrl from "../../audio-processor.ts?worker&url";
-import { FC, useEffect, useState, useCallback, useRef, MutableRefObject } from "react";
+import { FC, useEffect, useState, useCallback, useRef, MutableRefObject, ChangeEvent } from "react";
 import eruda from "eruda";
 import { useSearchParams } from "react-router-dom";
 import { Conversation } from "../Conversation/Conversation";
@@ -7,13 +7,7 @@ import { Button } from "../../components/Button/Button";
 import { useModelParams } from "../Conversation/hooks/useModelParams";
 import { env } from "../../env";
 import { prewarmDecoderWorker } from "../../decoder/decoderWorker";
-
-const VOICE_OPTIONS = [
-  "NATF0.pt", "NATF1.pt", "NATF2.pt", "NATF3.pt",
-  "NATM0.pt", "NATM1.pt", "NATM2.pt", "NATM3.pt",
-  "VARF0.pt", "VARF1.pt", "VARF2.pt", "VARF3.pt", "VARF4.pt",
-  "VARM0.pt", "VARM1.pt", "VARM2.pt", "VARM3.pt", "VARM4.pt",
-];
+import { useVoices } from "../../hooks/useVoices";
 
 const TEXT_PROMPT_PRESETS = [
   {
@@ -41,6 +35,9 @@ interface HomepageProps {
   setTextPrompt: (value: string) => void;
   voicePrompt: string;
   setVoicePrompt: (value: string) => void;
+  voices: string[];
+  uploadVoice: (file: File) => Promise<string | null>;
+  uploading: boolean;
 }
 
 const Homepage = ({
@@ -50,7 +47,22 @@ const Homepage = ({
   setTextPrompt,
   voicePrompt,
   setVoicePrompt,
+  voices,
+  uploadVoice,
+  uploading,
 }: HomepageProps) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const filename = await uploadVoice(file);
+    if (filename) {
+      setVoicePrompt(filename);
+    }
+    // Reset input so the same file can be re-uploaded
+    e.target.value = "";
+  };
   return (
     <div className="text-center h-screen w-screen p-4 flex flex-col items-center pt-8">
       <div className="mb-6">
@@ -97,22 +109,44 @@ const Homepage = ({
           <label htmlFor="voice-prompt" className="block text-left text-base font-medium text-gray-700 mb-2">
             Voice:
           </label>
-          <select
-            id="voice-prompt"
-            name="voice-prompt"
-            value={voicePrompt}
-            onChange={(e) => setVoicePrompt(e.target.value)}
-            className="w-full p-3 bg-white text-black border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-[#76b900] focus:border-transparent"
-          >
-            {VOICE_OPTIONS.map((voice) => (
-              <option key={voice} value={voice}>
-                {voice
-                  .replace('.pt', '')
+          <div className="flex gap-2">
+            <select
+              id="voice-prompt"
+              name="voice-prompt"
+              value={voicePrompt}
+              onChange={(e) => setVoicePrompt(e.target.value)}
+              className="flex-1 p-3 bg-white text-black border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-[#76b900] focus:border-transparent"
+            >
+              {voices.map((voice) => {
+                const isCustom = voice.endsWith('.wav');
+                const baseName = voice.replace(/\.(pt|wav)$/, '');
+                const displayName = baseName
                   .replace(/^NAT/, 'NATURAL_')
-                  .replace(/^VAR/, 'VARIETY_')}
-              </option>
-            ))}
-          </select>
+                  .replace(/^VAR/, 'VARIETY_');
+                return (
+                  <option key={voice} value={voice}>
+                    {isCustom ? `${displayName} (custom)` : displayName}
+                  </option>
+                );
+              })}
+            </select>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".wav"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+              className="p-3 bg-white text-gray-700 border border-gray-300 rounded hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-[#76b900] disabled:opacity-50"
+              title="Upload custom voice (.wav)"
+            >
+              {uploading ? "..." : "\u2B06"}
+            </button>
+          </div>
       </div>
 
         {showMicrophoneAccessMessage && (
@@ -132,6 +166,7 @@ export const Queue:FC = () => {
   const [hasMicrophoneAccess, setHasMicrophoneAccess] = useState<boolean>(false);
   const [showMicrophoneAccessMessage, setShowMicrophoneAccessMessage] = useState<boolean>(false);
   const modelParams = useModelParams();
+  const { voices, uploadVoice, uploading } = useVoices();
 
   const audioContext = useRef<AudioContext | null>(null);
   const worklet = useRef<AudioWorkletNode | null>(null);
@@ -209,6 +244,9 @@ export const Queue:FC = () => {
           setTextPrompt={modelParams.setTextPrompt}
           voicePrompt={modelParams.voicePrompt}
           setVoicePrompt={modelParams.setVoicePrompt}
+          voices={voices}
+          uploadVoice={uploadVoice}
+          uploading={uploading}
         />
       )}
     </>

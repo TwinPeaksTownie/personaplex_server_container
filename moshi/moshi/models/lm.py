@@ -1038,7 +1038,7 @@ class LMGen(StreamingModule[_LMGenState]):
             state.cache.copy_(self.voice_prompt_cache)
             return
 
-        elif self.voice_prompt_audio is not None:
+        if self.voice_prompt_audio is not None:
             saved_embeddings = []
             for voice_prompt_frame_tokens in self._encode_voice_prompt_frames(mimi):
                 yield
@@ -1046,12 +1046,10 @@ class LMGen(StreamingModule[_LMGenState]):
                     voice_prompt_frame_tokens,
                     saved_embeddings
                 )
-            # One last checkpoint before any optional save (nice-to-have for async disconnect)
+            # One last checkpoint before any optional save
             yield
 
             if self.save_voice_prompt_embeddings:
-                # Offset int(self._streaming_state.offset) is not needed since calling step() for len(voice_prompt_frame_tokens)
-                # and calling step_embeddings() for len(voice_prompt_embeddings) will increment offset by the same amount
                 torch.save(
                     {
                         "embeddings": torch.stack(saved_embeddings, dim=0).detach().cpu(),

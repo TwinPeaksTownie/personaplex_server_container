@@ -1,6 +1,7 @@
-import { FC, RefObject, useState } from "react";
+import { FC, RefObject, useState, useRef, ChangeEvent } from "react";
 import { useModelParams } from "../../hooks/useModelParams";
 import { Button } from "../../../../components/Button/Button";
+import { useVoices } from "../../../../hooks/useVoices";
 
 type ModelParamsProps = {
   isConnected: boolean;
@@ -22,8 +23,20 @@ export const ModelParams:FC<ModelParamsProps> = ({
   randomSeed,
   modal,
 }) => {
+  const { voices, uploadVoice, uploading } = useVoices();
   const [modalVoicePrompt, setModalVoicePrompt] = useState<string>(voicePrompt);
   const [modalTextPrompt, setModalTextPrompt] = useState<string>(textPrompt);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const filename = await uploadVoice(file);
+    if (filename) {
+      setModalVoicePrompt(filename);
+    }
+    e.target.value = "";
+  };
   return (
     <div className=" p-2 mt-6 self-center flex flex-col items-center text-center">
         <table>
@@ -37,26 +50,38 @@ export const ModelParams:FC<ModelParamsProps> = ({
               <td>Voice Prompt:</td>
               <td className="w-12 text-center">{modalVoicePrompt}</td>
               <td className="p-2">
-                <select className="align-middle bg-white text-black border border-gray-300 rounded px-2 py-1" disabled={isConnected} id="voice-prompt" name="voice-prompt" value={modalVoicePrompt} onChange={e => setModalVoicePrompt(e.target.value)}>
-                  <option value="NATF0.pt">NATF0.pt</option>
-                  <option value="NATF1.pt">NATF1.pt</option>
-                  <option value="NATF2.pt">NATF2.pt</option>
-                  <option value="NATF3.pt">NATF3.pt</option>
-                  <option value="NATM0.pt">NATM0.pt</option>
-                  <option value="NATM1.pt">NATM1.pt</option>
-                  <option value="NATM2.pt">NATM2.pt</option>
-                  <option value="NATM3.pt">NATM3.pt</option>
-                  <option value="VARF0.pt">VARF0.pt</option>
-                  <option value="VARF1.pt">VARF1.pt</option>
-                  <option value="VARF2.pt">VARF2.pt</option>
-                  <option value="VARF3.pt">VARF3.pt</option>
-                  <option value="VARF4.pt">VARF4.pt</option>
-                  <option value="VARM0.pt">VARM0.pt</option>
-                  <option value="VARM1.pt">VARM1.pt</option>
-                  <option value="VARM2.pt">VARM2.pt</option>
-                  <option value="VARM3.pt">VARM3.pt</option>
-                  <option value="VARM4.pt">VARM4.pt</option>
-                </select>
+                <div className="flex gap-1 items-center">
+                  <select className="align-middle bg-white text-black border border-gray-300 rounded px-2 py-1" disabled={isConnected} id="voice-prompt" name="voice-prompt" value={modalVoicePrompt} onChange={e => setModalVoicePrompt(e.target.value)}>
+                    {voices.map((voice) => {
+                      const isCustom = voice.endsWith('.wav');
+                      const baseName = voice.replace(/\.(pt|wav)$/, '');
+                      const displayName = baseName
+                        .replace(/^NAT/, 'NATURAL_')
+                        .replace(/^VAR/, 'VARIETY_');
+                      return (
+                        <option key={voice} value={voice}>
+                          {isCustom ? `${displayName} (custom)` : displayName}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".wav"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    disabled={isConnected || uploading}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="bg-white text-black border border-gray-300 rounded px-2 py-1 hover:bg-gray-100 disabled:opacity-50"
+                    title="Upload custom voice (.wav)"
+                  >
+                    {uploading ? "..." : "\u2B06"}
+                  </button>
+                </div>
               </td>
             </tr>
           </tbody>
