@@ -3,9 +3,8 @@
 This is the technical specification for building native clients (Mac, Linux, Robot) for the PersonaPlex engine.
 
 ## 1. Connection Discovery
-- **Primary Endpoint**: `wss://[IP]:8080/api/chat`
-- **Proxy Endpoint** (via Vite): `wss://[IP]:5173/api/chat`
-- **Voice List**: `https://[IP]:8080/api/voices` (Returns JSON array)
+- **WebSocket Endpoint**: `ws://[IP]:8080/api/chat`
+- **Voice List**: `http://[IP]:8080/api/voices` (Returns JSON array)
 
 ## 2. Query Parameters
 | Parameter | Type | Required | Notes |
@@ -17,7 +16,7 @@ This is the technical specification for building native clients (Mac, Linux, Rob
 ## 3. Handshake & State Machine
 A client **MUST** follow this sequence to avoid the "hallucination delay":
 
-1.  **CONNECT**: Open WSS connection with params.
+1.  **CONNECT**: Open WebSocket connection with params.
 2.  **PRIMING (Wait)**: The server is loading weights and warming the KV-cache.
     - **CRITICAL**: **Do NOT send audio bytes.** 
     - Anything sent now enters an "Inference Backlog" and causes the AI to respond to your past self.

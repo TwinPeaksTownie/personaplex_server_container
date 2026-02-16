@@ -5,7 +5,7 @@ This document is the definitive technical reference for building PersonaPlex cli
 ## 1. Discovery & Control Layer (MCP)
 The server implements a **Model Context Protocol (MCP)** host over JSON-RPC (HTTP POST).
 
-- **Endpoint**: `POST https://[IP]:8080/mcp`
+- **Endpoint**: `POST http://[IP]:8080/mcp`
 - **Content-Type**: `application/json`
 
 ### Supported Methods
@@ -23,9 +23,8 @@ Returns GPU device info, current VRAM usage, and engine status.
 ---
 
 ## 2. Infrastructure & Connection
-- **Protocol**: Secure WebSocket (`wss://`)
-- **Port**: 8080 (Primary) or 5173 (Proxy)
-- **SSL**: Self-signed. Clients **must** disable certificate verification for local development.
+- **Protocol**: WebSocket (`ws://`)
+- **Port**: 8080
 
 ---
 

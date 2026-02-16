@@ -49,7 +49,7 @@ Create a new voice collaboration session.
 
 **curl:**
 ```bash
-curl -k -X POST https://localhost:5173/api/sessions/start \
+curl -X POST http://localhost:8080/api/sessions/start \
   -H "Content-Type: application/json" \
   -d '{"voice_prompt": "NATF2.pt", "text_prompt": "You are a helpful assistant."}'
 ```
@@ -89,7 +89,7 @@ Get session status, transcript, and computed fields.
 
 **curl:**
 ```bash
-curl -k https://localhost:5173/api/sessions/a1b2c3d4-e5f6-7890-abcd-ef1234567890
+curl http://localhost:8080/api/sessions/a1b2c3d4-e5f6-7890-abcd-ef1234567890
 ```
 
 ---
@@ -107,7 +107,7 @@ Signal an active session to end gracefully. The WebSocket connection will close 
 
 **curl:**
 ```bash
-curl -k -X POST https://localhost:5173/api/sessions/a1b2c3d4-e5f6-7890-abcd-ef1234567890/stop
+curl -X POST http://localhost:8080/api/sessions/a1b2c3d4-e5f6-7890-abcd-ef1234567890/stop
 ```
 
 ---
@@ -126,7 +126,7 @@ List recent sessions (most recent first, max 50).
 
 **curl:**
 ```bash
-curl -k https://localhost:5173/api/sessions
+curl http://localhost:8080/api/sessions
 ```
 
 ---
@@ -201,4 +201,4 @@ The same functionality is available via the MCP endpoint (`POST /mcp`):
 - The GPU is **single-client locked** — only one active voice session at a time
 - AI text comes from the model's token stream (high accuracy, real-time)
 - User text comes from Whisper ASR transcription (~3-second chunks, slight delay)
-- The `-k` flag is needed for curl because the gateway uses a self-signed SSL certificate
+- The server runs on plain HTTP port 8080

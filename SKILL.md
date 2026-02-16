@@ -15,7 +15,7 @@ A voice conversation tool for AI agents. Instead of crafting the perfect text pr
 ## Server Requirements
 
 - PersonaPlex server running and accessible (Docker container with GPU)
-- Server URL: `https://<host>:5173` (self-signed SSL, use `--insecure` / skip TLS verification)
+- Server URL: `http://<host>:8080`
 - GPU with 16GB+ VRAM
 
 ## How To Use
@@ -23,7 +23,7 @@ A voice conversation tool for AI agents. Instead of crafting the perfect text pr
 ### Step 1: Start a Session
 
 ```bash
-curl -k -X POST https://<host>:5173/api/sessions/start \
+curl -X POST http://<host>:8080/api/sessions/start \
   -H "Content-Type: application/json" \
   -d '{
     "voice_prompt": "NATF2.pt",
@@ -45,7 +45,7 @@ Response:
 
 Direct the user's audio client (browser, robot, app) to the WebSocket URL:
 ```
-wss://<host>:5173<websocket_url from step 1>
+ws://<host>:8080<websocket_url from step 1>
 ```
 
 The WebSocket uses a binary protocol:
@@ -61,7 +61,7 @@ The user just talks. No typing required.
 While the session is active (or after it ends), poll the transcript:
 
 ```bash
-curl -k https://<host>:5173/api/sessions/<session_id>
+curl http://<host>:8080/api/sessions/<session_id>
 ```
 
 Response:
@@ -85,7 +85,7 @@ Response:
 To end a session programmatically (e.g., after a time limit):
 
 ```bash
-curl -k -X POST https://<host>:5173/api/sessions/<session_id>/stop
+curl -X POST http://<host>:8080/api/sessions/<session_id>/stop
 ```
 
 Otherwise, the session ends naturally when the WebSocket disconnects.
@@ -154,14 +154,13 @@ Document requirements as the user describes them.
 
 Query available voices:
 ```bash
-curl -k https://<host>:5173/api/voices
+curl http://<host>:8080/api/voices
 ```
 
 Built-in voices:
-- `NATF0.pt` through `NATF3.pt` — Natural female
-- `NATM0.pt` through `NATM3.pt` — Natural male
-- `VARF0.pt` through `VARF4.pt` — Variety female
-- `VARM0.pt` through `VARM4.pt` — Variety male
+- `Claude.pt` — Claude
+- `Cole.pt` — Cole
+- `Laura.pt` — Laura
 
 Custom voices: Upload a `.wav` file via `/api/voices/upload` — it gets encoded on first use and cached as `.pt`.
 
