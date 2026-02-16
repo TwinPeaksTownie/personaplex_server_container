@@ -1,0 +1,24 @@
+services:
+  personaplex:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080" # Unified Entrypoint (HTTP/WSS)
+    environment:
+      - NO_TORCH_COMPILE=1
+      - HF_HOME=/app/.cache/huggingface
+      - HF_TOKEN=${HF_TOKEN}
+      - PYTHONUNBUFFERED=1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./voices:/app/voices
+      - ./.cache/huggingface:/app/.cache/huggingface
+      - ./ssl:/app/ssl
+    restart: unless-stopped
